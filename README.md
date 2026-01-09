@@ -951,7 +951,7 @@ fiche_predictions <- as.data.frame(to_predict_ok) %>%
   arrange(Date, HomeTeam, AwayTeam) %>%
   select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A, p_max)
 
-print(fiche_predictions, n = 50)
+print(head(fiche_predictions, n = 50))
 fiche_predictions <- fiche_predictions %>%
   mutate(
     pred_class = case_when(
