@@ -1,0 +1,968 @@
+---
+title: "Code"
+output: html_document
+date: "2026-01-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE)
+```
+
+```{r}
+# Packages utilisés
+library(tidyr)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(gridExtra)
+library(readr)
+library(stringr)
+library(broom)
+library(slider)
+library(nnet)
+library(shiny)
+library(shinythemes)
+library(data.table)
+```
+
+(i) Importation des jeux de données de toutes les saisons.
+
+```{r}
+df_2021_2022 <- read_csv("C:/Users/Daniel/OneDrive/MPE/Analyse de donnée/Saison 2021-2022.csv")
+df_2022_2023 <- read_csv("C:/Users/Daniel/OneDrive/MPE/Analyse de donnée/Saison 2022-2023.csv")
+df_2023_2024 <- read_csv("C:/Users/Daniel/OneDrive/MPE/Analyse de donnée/Saison 2023-2024.csv")
+df_2024_2025 <- read_csv("C:/Users/Daniel/OneDrive/MPE/Analyse de donnée/Saison 2024-2025.csv")
+df_2025_2026 <- read_csv("C:/Users/Daniel/OneDrive/MPE/Analyse de donnée/Saison 2025-2026.csv")
+
+```
+
+(ii) Création de de la base de données finale
+
+```{r}
+matches <- bind_rows(
+  df_2021_2022,
+  df_2022_2023,
+  df_2023_2024,
+  df_2024_2025,
+  df_2025_2026) %>%
+  arrange(Date)
+matches <- matches %>%
+  select(
+    Date,
+    HomeTeam, AwayTeam,
+    FTR, FTHG, FTAG,
+    HS,AS,HST,AST,HC,
+    AC,HY,AY,HR,AR)
+```
+
+(iii) Restructuration des dates
+
+```{r}
+matches <- matches %>%                                                         
+  mutate(Date = dmy(Date))                                                      
+```
+
+(iv) Saisonnalité
+
+```{r}
+matches <- matches %>%                                                          
+  mutate(                                         
+    season = if_else(
+      month(Date) >= 7,                                                        
+      paste0(year(Date), "-", year(Date) + 1),                                 
+      paste0(year(Date) - 1, "-", year(Date))                                   
+    )
+  )
+
+matches <- matches %>%
+  arrange(Date)                                   
+```
+
+II) Phase 1 : Entraînement (apprentissage) sur les données des saisons 2021-2022, 2022-2023 et 2023-2024 réalisé notamment grâce à la création de features 
+
+1) Création des nouvelles variables 
+
+```{r}
+matches <- matches %>%
+  arrange(Date) %>%
+  mutate(
+    home_points = case_when(                                                    
+      FTR == "H" ~ 3,                                                           
+      FTR == "D" ~ 1,                                                           
+      TRUE ~ 0                                                                  
+    ),
+    away_points = case_when(                                                    
+      FTR == "A" ~ 3,                                                           
+      FTR == "D" ~ 1,                                                           
+      TRUE ~ 0                                                                  
+    ),
+    match_id = row_number()                                                     
+  )
+```
+
+2) Forme récente
+
+```{r}
+# Première Étape : 
+
+N <- 5                                                                          
+team_matches <- matches %>%
+  arrange(Date) %>% 
+  select(match_id, Date, HomeTeam, AwayTeam, home_points, away_points) %>%
+  pivot_longer(                                                                 
+    cols = c(HomeTeam, AwayTeam),                                               
+    names_to  = "side",                                                         
+    values_to = "team"                                                          
+  ) %>%
+  mutate(
+    points = if_else(side == "HomeTeam", home_points, away_points)              
+  ) %>%                                                                         
+  select(match_id, Date, team, points)
+
+# Deuxième Étape :
+
+team_form <- team_matches %>%
+  group_by(team) %>%
+  mutate(
+    form_pts_lastN = slide_dbl(                                                 
+      .x = lag(points),                                                         
+      .f = ~ mean(.x, na.rm = TRUE),                                            
+      .before = N - 1,                                                          
+      .complete = FALSE                                                         
+    )
+  ) %>%
+  ungroup() %>%                                                                
+  select(match_id, team, form_pts_lastN)                                        
+
+# Troisième Étape : 
+
+matches <- matches %>%                                                          
+  left_join(
+    team_form %>% rename(home_form_pts_lastN = form_pts_lastN),
+    by = c("match_id", "HomeTeam" = "team")
+  )
+
+matches <- matches %>%                                                          
+  left_join(
+    team_form %>% rename(away_form_pts_lastN = form_pts_lastN),
+    by = c("match_id", "AwayTeam" = "team")
+  )
+
+matches <- matches %>%                                                         
+  mutate(form_diff_lastN = home_form_pts_lastN - away_form_pts_lastN)
+```
+
+3) Points cumulés
+
+```{r}
+# Première Étape : 
+
+team_points <- matches %>%
+  select(match_id, Date, season, HomeTeam, AwayTeam, home_points, away_points) %>%
+  pivot_longer(                                                                 
+    cols = c(HomeTeam, AwayTeam),                                               
+    names_to = "side",                                                          
+    values_to = "team"                                                          
+  ) %>%
+  mutate(
+    points = if_else(side == "HomeTeam", home_points, away_points)              
+  ) %>%
+  select(match_id, Date, season, team, points)                                  
+
+# Deuxième Étape : 
+
+team_cum_pts <- team_points %>%
+  group_by(team, season) %>%                                                    
+  mutate(
+    cum_pts_before = lag(cumsum(points), default = 0)                           
+   ) %>%
+  ungroup() %>%
+  select(match_id, team, season, cum_pts_before)
+
+# Troisième Étape : 
+
+matches <- matches %>%                                                          
+  left_join(
+    team_cum_pts %>% rename(home_cum_pts = cum_pts_before),
+    by = c("match_id", "season", "HomeTeam" = "team")
+  )
+
+matches <- matches %>%
+  left_join(
+    team_cum_pts %>% rename(away_cum_pts = cum_pts_before),
+    by = c("match_id", "season", "AwayTeam" = "team")
+  )
+
+matches <- matches %>%
+  mutate(
+    cum_pts_diff = home_cum_pts - away_cum_pts
+  )
+```
+
+4) Différentiels de buts
+
+```{r}
+
+# Première Étape : 
+
+team_goals <- matches %>%
+  select(match_id, Date, season, HomeTeam, AwayTeam, FTHG, FTAG) %>%
+  
+  pivot_longer(
+    cols = c(HomeTeam, AwayTeam),
+    names_to  = "side",   #
+    values_to = "team"    
+  ) %>%
+  mutate(
+    goals_for = if_else(side == "HomeTeam", FTHG, FTAG),                        
+    goals_against = if_else(side == "HomeTeam", FTAG, FTHG),                    
+    across(c(goals_for, goals_against), ~ replace_na(.x, 0))                    
+    ) %>%                                                                       
+  select(match_id, Date, season, team, goals_for, goals_against)
+
+# Deuxième Étape :
+
+team_cum_goals <- team_goals %>%
+  group_by(team, season) %>%                                                    
+  mutate(
+    cum_gf_including = cumsum(goals_for),                                       
+    cum_ga_including = cumsum(goals_against),                                  
+    cum_gf_before = lag(cum_gf_including, default = 0),                         
+    cum_ga_before = lag(cum_ga_including, default = 0),                         
+    cum_gd_before = cum_gf_before - cum_ga_before                              
+  ) %>%                                                                         
+  ungroup() %>%
+  select(match_id, team, season, cum_gf_before, cum_ga_before, cum_gd_before)   
+                                                                                
+# Troisième Étape : 
+
+matches <- matches %>%
+  left_join(
+    team_cum_goals %>%
+      rename(
+        home_cum_gf = cum_gf_before,
+        home_cum_ga = cum_ga_before,
+        home_cum_gd = cum_gd_before
+      ),
+    by = c("match_id", "season", "HomeTeam" = "team")
+  )
+
+matches <- matches %>%
+  left_join(
+    team_cum_goals %>%
+      rename(
+        away_cum_gf = cum_gf_before,
+        away_cum_ga = cum_ga_before,
+        away_cum_gd = cum_gd_before
+      ),
+    by = c("match_id", "season", "AwayTeam" = "team")
+  )
+
+# Quatrième Étape :
+
+matches <- matches %>%
+  mutate(
+    cum_gf_diff = home_cum_gf - away_cum_gf,                                    
+    cum_ga_diff = home_cum_ga - away_cum_ga,                                    
+    cum_gd_diff = home_cum_gd - away_cum_gd )                                  
+```
+
+II) Phase 2 : Évaluation du modèle entraîné sur la saison 2024–2025
+
+1) Application du modèle entraîné sur la saison 2024-2025
+
+(i) Préparation de la variable dépendante
+
+```{r}
+matches <- matches %>%
+  mutate(
+    FTR = factor(FTR, levels = c("H", "D", "A")))
+```
+
+(ii) Construction des échantillons d'apprentissage et de test
+
+```{r}
+# Échantillon d'apprentissage
+train_data <- matches %>%
+  filter(season %in% c("2021-2022", "2022-2023", "2023-2024")) %>%
+  drop_na(form_diff_lastN)
+
+# Échantillon de test (saison 2024-2025)
+test_data <- matches %>%
+  filter(season == "2024-2025") %>%
+  drop_na(form_diff_lastN)
+
+```
+
+(iii) Entrainement du modèle de classification multinomiale
+
+```{r}
+# Modèle multinomiale avec les features principaux
+model_multinom <- multinom(
+  FTR ~ form_diff_lastN + cum_pts_diff + cum_gd_diff,
+  data = train_data,
+  trace = FALSE)
+```
+
+(iv) Prédiction des probabilités (saison 2024/2025)
+
+```{r}
+proba_test <- predict(
+  model_multinom,
+  newdata = test_data,
+  type = "probs")
+
+# Intégration des probabilités dans la base de test
+test_data <- test_data %>%
+  mutate(
+    proba_H = proba_test[, "H"],
+    proba_D = proba_test[, "D"],
+    proba_A = proba_test[, "A"])
+```
+
+2) Évaluation des performances du modèle
+
+(i) Classe prédite
+
+```{r}
+test_data <- test_data %>%
+  mutate(
+    pred_class = colnames(proba_test)[apply(proba_test, 1, which.max)])
+```
+
+(ii) Matrice de confusion et accruacy globale du modèle
+
+```{r}
+confusion_matrix <- table(
+  Observed = test_data$FTR,
+  Predicted = test_data$pred_class)
+confusion_matrix
+```
+
+```{r}
+accuracy <- mean(test_data$FTR == test_data$pred_class)
+accuracy
+```
+
+
+IV) Phase 3 : Prédiction des probabilités sur la saison 2025–2026 
+
+1) Génération des probabilités de victoire pour les matchs déjà joués de la saison 25/26  
+
+(i) Construction de l’échantillon de prédiction (saison 2025–2026) 
+
+```{r}
+# Échantillon de prédiction : saison 2025-2026
+features <- c(
+  "form_diff_lastN",
+  "cum_pts_diff",
+  "cum_gd_diff")
+pred_2526 <- matches %>%
+  filter(season == "2025-2026") %>%
+  drop_na(features) %>%
+  select(match_id, Date, HomeTeam, AwayTeam,FTR, features)
+```
+
+(ii) Prédiction des probabilités avec le modèle entraîné 
+
+```{r}
+train_data_final <- matches %>%
+  filter(season %in% c("2021-2022", "2022-2023", "2023-2024","2024-2025")) %>%
+  drop_na(form_diff_lastN)
+
+model_multinom <- multinom(
+  FTR ~ form_diff_lastN + cum_pts_diff + cum_gd_diff,
+  data = train_data_final,
+  trace = FALSE)
+proba_2526 <- as.matrix(predict(model_multinom, newdata = pred_2526, type = "probs"))
+```
+
+(iii) Intégration des probabilités dans la base de données 
+
+```{r}
+pred_2526_out <- pred_2526 %>%
+  mutate(
+    proba_H = proba_2526[, "H"],
+    proba_D = proba_2526[, "D"],
+    proba_A = proba_2526[, "A"],
+
+    p_max = pmax(proba_H, proba_D, proba_A),
+
+    pred_argmax = case_when(
+      proba_H == p_max ~ "H",
+      proba_D == p_max ~ "D",
+      TRUE             ~ "A"
+    )
+  ) %>%
+  arrange(Date)
+```
+
+(iv) Illustration : matches très déséquilibrés vs matches très incertains 
+
+Ici Matches les plus déséquilibrés :
+
+```{r}
+pred_2526_out %>%
+arrange(desc(p_max)) %>%
+select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A,p_max ) %>%
+head(10)
+```
+
+Ici Matches les plus incertains :
+
+```{r}
+pred_2526_out %>%
+arrange(p_max) %>%
+select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A, p_max) %>%
+head(10)
+```
+
+2) Génération des probabilités de victoire pour les matchs futurs de la saison 25/26 
+
+(i)Ajout des rencontres non disponible dans la base de donnée 25/26 
+
+```{r}
+#Journées 17 à 22
+fixtures_17_22 <- tribble(
+  ~Date,         ~Round, ~HomeTeam,     ~AwayTeam,
+  "2026-01-04",   17,     "Marseille",   "Nantes",
+  "2026-01-04",   17,     "Brest",       "Auxerre",
+  "2026-01-04",   17,     "Le Havre",    "Angers",
+  "2026-01-04",   17,     "Lorient",     "Metz",
+  "2026-01-04",   17,     "Paris SG",    "Paris FC",
+  
+  "2026-01-16",   18,     "Monaco",      "Lorient",
+  "2026-01-16",   18,     "Paris SG",    "Lille",
+  "2026-01-17",   18,     "Lens",        "Auxerre",
+  "2026-01-17",   18,     "Toulouse",    "Nice",
+  "2026-01-17",   18,     "Angers",      "Marseille",
+  "2026-01-18",   18,     "Strasbourg",  "Metz",
+  "2026-01-18",   18,     "Nantes",      "Paris FC",
+  "2026-01-18",   18,     "Rennes",      "Le Havre",
+  "2026-01-18",   18,     "Lyon",        "Brest",
+  
+  "2026-01-23",   19,     "Auxerre",     "Paris SG",
+  "2026-01-24",   19,     "Rennes",      "Lorient",
+  "2026-01-24",   19,     "Le Havre",    "Monaco",
+  "2026-01-24",   19,     "Marseille",   "Lens",
+  "2026-01-25",   19,     "Nantes",      "Nice",
+  "2026-01-25",   19,     "Brest",       "Toulouse",
+  "2026-01-25",   19,     "Metz",        "Lyon",
+  "2026-01-25",   19,     "Paris FC",    "Angers",
+  "2026-01-25",   19,     "Lille",       "Strasbourg",
+  
+  "2026-01-30",   20,     "Lens",        "Le Havre",
+  "2026-01-31",   20,     "Paris FC",    "Marseille",
+  "2026-01-31",   20,     "Lorient",     "Nantes",
+  "2026-01-31",   20,     "Monaco",      "Rennes",
+  "2026-02-01",   20,     "Lyon",        "Lille",
+  "2026-02-01",   20,     "Angers",      "Metz",
+  "2026-02-01",   20,     "Nice",        "Brest",
+  "2026-02-01",   20,     "Toulouse",    "Auxerre",
+  "2026-02-01",   20,     "Strasbourg",  "Paris SG",
+  
+  "2026-02-08",   21,     "Angers",      "Toulouse",
+  "2026-02-08",   21,     "Auxerre",     "Paris FC",
+  "2026-02-08",   21,     "Brest",       "Lorient",
+  "2026-02-08",   21,     "Le Havre",    "Strasbourg",
+  "2026-02-08",   21,     "Lens",        "Rennes",
+  "2026-02-08",   21,     "Metz",        "Lille",
+  "2026-02-08",   21,     "Nantes",      "Lyon",
+  "2026-02-08",   21,     "Nice",        "Monaco",
+  "2026-02-08",   21,     "Paris SG",    "Marseille",
+  
+  "2026-02-15",   22,     "Le Havre",    "Toulouse",
+  "2026-02-15",   22,     "Lille",       "Brest",
+  "2026-02-15",   22,     "Lorient",     "Angers",
+  "2026-02-15",   22,     "Lyon",        "Nice",
+  "2026-02-15",   22,     "Marseille",   "Strasbourg",
+  "2026-02-15",   22,     "Metz",        "Auxerre",
+  "2026-02-15",   22,     "Monaco",      "Nantes",
+  "2026-02-15",   22,     "Paris FC",    "Lens",
+  "2026-02-15",   22,     "Rennes",      "Paris SG")
+```
+
+```{r}
+#Journées 23 à 32
+fixtures_23_32 <- tribble(
+  ~Round, ~Date,        ~HomeTeam,     ~AwayTeam,
+  23, "2026-02-22", "Angers",      "Lille",
+  23, "2026-02-22", "Auxerre",     "Rennes",
+  23, "2026-02-22", "Brest",       "Marseille",
+  23, "2026-02-22", "Lens",        "Monaco",
+  23, "2026-02-22", "Nantes",      "Le Havre",
+  23, "2026-02-22", "Nice",        "Lorient",
+  23, "2026-02-22", "Paris SG",    "Metz",
+  23, "2026-02-22", "Strasbourg",  "Lyon",
+  23, "2026-02-22", "Toulouse",    "Paris FC",
+
+  24, "2026-03-01", "Le Havre",    "Paris SG",
+  24, "2026-03-01", "Lille",       "Nantes",
+  24, "2026-03-01", "Lorient",     "Auxerre",
+  24, "2026-03-01", "Marseille",   "Lyon",
+  24, "2026-03-01", "Metz",        "Brest",
+  24, "2026-03-01", "Monaco",      "Angers",
+  24, "2026-03-01", "Paris FC",    "Nice",
+  24, "2026-03-01", "Rennes",      "Toulouse",
+  24, "2026-03-01", "Strasbourg",  "Lens",
+
+  25, "2026-03-08", "Auxerre",     "Strasbourg",
+  25, "2026-03-08", "Brest",       "Le Havre",
+  25, "2026-03-08", "Lens",        "Metz",
+  25, "2026-03-08", "Lille",       "Lorient",
+  25, "2026-03-08", "Lyon",        "Paris FC",
+  25, "2026-03-08", "Nantes",      "Angers",
+  25, "2026-03-08", "Nice",        "Rennes",
+  25, "2026-03-08", "Paris SG",    "Monaco",
+  25, "2026-03-08", "Toulouse",    "Marseille",
+
+  26, "2026-03-15", "Angers",      "Nice",
+  26, "2026-03-15", "Le Havre",    "Lyon",
+  26, "2026-03-15", "Lorient",     "Lens",
+  26, "2026-03-15", "Marseille",   "Auxerre",
+  26, "2026-03-15", "Metz",        "Toulouse",
+  26, "2026-03-15", "Monaco",      "Brest",
+  26, "2026-03-15", "Paris SG",    "Nantes",
+  26, "2026-03-15", "Rennes",      "Lille",
+  26, "2026-03-15", "Strasbourg",  "Paris FC",
+
+  27, "2026-03-22", "Auxerre",     "Brest",
+  27, "2026-03-22", "Lens",        "Angers",
+  27, "2026-03-22", "Lyon",        "Monaco",
+  27, "2026-03-22", "Marseille",   "Lille",
+  27, "2026-03-22", "Nantes",      "Strasbourg",
+  27, "2026-03-22", "Nice",        "Paris SG",
+  27, "2026-03-22", "Paris FC",    "Le Havre",
+  27, "2026-03-22", "Rennes",      "Metz",
+  27, "2026-03-22", "Toulouse",    "Lorient",
+
+  28, "2026-04-05", "Angers",      "Lyon",
+  28, "2026-04-05", "Brest",       "Rennes",
+  28, "2026-04-05", "Le Havre",    "Auxerre",
+  28, "2026-04-05", "Lille",       "Lens",
+  28, "2026-04-05", "Lorient",     "Paris FC",
+  28, "2026-04-05", "Metz",        "Nantes",
+  28, "2026-04-05", "Monaco",      "Marseille",
+  28, "2026-04-05", "Paris SG",    "Toulouse",
+  28, "2026-04-05", "Strasbourg",  "Nice",
+
+  29, "2026-04-12", "Auxerre",     "Nantes",
+  29, "2026-04-12", "Brest",       "Strasbourg",
+  29, "2026-04-12", "Lens",        "Paris SG",
+  29, "2026-04-12", "Lyon",        "Lorient",
+  29, "2026-04-12", "Marseille",   "Metz",
+  29, "2026-04-12", "Nice",        "Le Havre",
+  29, "2026-04-12", "Paris FC",    "Monaco",
+  29, "2026-04-12", "Rennes",      "Angers",
+  29, "2026-04-12", "Toulouse",    "Lille",
+
+  30, "2026-04-19", "Angers",      "Le Havre",
+  30, "2026-04-19", "Lens",        "Toulouse",
+  30, "2026-04-19", "Lille",       "Nice",
+  30, "2026-04-19", "Lorient",     "Marseille",
+  30, "2026-04-19", "Metz",        "Paris FC",
+  30, "2026-04-19", "Monaco",      "Auxerre",
+  30, "2026-04-19", "Nantes",      "Brest",
+  30, "2026-04-19", "Paris SG",    "Lyon",
+  30, "2026-04-19", "Strasbourg",  "Rennes",
+
+  31, "2026-04-26", "Angers",      "Paris SG",
+  31, "2026-04-26", "Brest",       "Lens",
+  31, "2026-04-26", "Le Havre",    "Metz",
+  31, "2026-04-26", "Lorient",     "Strasbourg",
+  31, "2026-04-26", "Lyon",        "Auxerre",
+  31, "2026-04-26", "Marseille",   "Nice",
+  31, "2026-04-26", "Paris FC",    "Lille",
+  31, "2026-04-26", "Rennes",      "Nantes",
+  31, "2026-04-26", "Toulouse",    "Monaco",
+
+  32, "2026-05-03", "Auxerre",     "Angers",
+  32, "2026-05-03", "Lille",       "Le Havre",
+  32, "2026-05-03", "Lyon",        "Rennes",
+  32, "2026-05-03", "Metz",        "Monaco",
+  32, "2026-05-03", "Nantes",      "Marseille",
+  32, "2026-05-03", "Nice",        "Lens",
+  32, "2026-05-03", "Paris FC",    "Brest",
+  32, "2026-05-03", "Paris SG",    "Lorient",
+  32, "2026-05-03", "Strasbourg",  "Toulouse")
+```
+
+```{r}
+#Journées 32 à 34
+fixtures_32_34 <- tribble(
+  ~Round, ~Date,        ~HomeTeam,     ~AwayTeam,
+
+  33, "2026-05-09", "Angers",      "Strasbourg",
+  33, "2026-05-09", "Auxerre",     "Nice",
+  33, "2026-05-09", "Le Havre",    "Marseille",
+  33, "2026-05-09", "Lens",        "Nantes",
+  33, "2026-05-09", "Metz",        "Lorient",
+  33, "2026-05-09", "Monaco",      "Lille",
+  33, "2026-05-09", "Paris SG",    "Brest",
+  33, "2026-05-09", "Rennes",      "Paris FC",
+  33, "2026-05-09", "Toulouse",    "Lyon",
+
+  34, "2026-05-16", "Brest",       "Angers",
+  34, "2026-05-16", "Lille",       "Auxerre",
+  34, "2026-05-16", "Lorient",     "Le Havre",
+  34, "2026-05-16", "Lyon",        "Lens",
+  34, "2026-05-16", "Marseille",   "Rennes",
+  34, "2026-05-16", "Nantes",      "Toulouse",
+  34, "2026-05-16", "Nice",        "Metz",
+  34, "2026-05-16", "Paris FC",    "Paris SG",
+  34, "2026-05-16", "Strasbourg",  "Monaco")
+```
+
+```{r}
+# Fonction de préparation des fixtures futures
+prepare_fixtures <- function(df) {
+  df %>%
+    mutate(
+      Date   = as.Date(Date),
+      season = "2025-2026",
+      FTHG   = NA_integer_,
+      FTAG   = NA_integer_,
+      FTR    = NA_character_)}
+
+#Ajout des rencontres à notre base de donnée de la saison 25/26 en évitant les doublons
+matches <- matches %>%
+  bind_rows(
+    list(fixtures_17_22, fixtures_23_32, fixtures_32_34) %>%
+      map_dfr(prepare_fixtures) %>% # Appliquer la fonction à chaque fixture et empiler les data.frames obtenus ligne par ligne
+      anti_join(matches, by = c("season", "Date", "HomeTeam", "AwayTeam")))
+```
+
+```{r}
+#Vérification que les noms des équipes sont tous les mêmes
+ref_teams <- sort(unique(c(matches$HomeTeam, matches$AwayTeam)))
+hist_teams <- sort(unique(team_form$team))
+unknown <- setdiff(ref_teams, hist_teams)
+unknown
+```
+
+(ii) Matchs futurs (post trêve)
+
+```{r}
+date_treve <- as.Date("2026-01-01")
+matches <- matches %>% mutate(Date = as.Date(Date))
+
+future <- matches %>%
+  filter(season == "2025-2026", is.na(FTR), Date >= date_treve) %>%
+  transmute(
+    season, Date, HomeTeam, AwayTeam,
+    fixture_id = paste(season, Date, HomeTeam, AwayTeam, sep="|")
+  ) %>%
+  distinct(fixture_id, .keep_all = TRUE)
+```
+
+(iii) Historique des matchs joués et transformation en équipe-match
+
+```{r}
+past <- matches %>%
+  filter(!is.na(FTR)) %>%
+  transmute(season, Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR)
+
+team_games <- past %>%
+  mutate(
+    home_pts = case_when(FTR=="H" ~ 3L, FTR=="D" ~ 1L, TRUE ~ 0L),
+    away_pts = case_when(FTR=="A" ~ 3L, FTR=="D" ~ 1L, TRUE ~ 0L),
+    home_gd  = FTHG - FTAG,
+    away_gd  = FTAG - FTHG
+  ) %>%
+  pivot_longer(c(HomeTeam, AwayTeam), names_to="side", values_to="team") %>%
+  mutate(
+    points = if_else(side=="HomeTeam", home_pts, away_pts),
+    gd     = if_else(side=="HomeTeam", home_gd,  away_gd)
+  ) %>%
+  select(season, Date, team, points, gd)
+```
+
+(iv) Features par équipe avant chaque match
+
+```{r}
+setDT(team_games)
+setorder(team_games, season, team, Date)
+
+team_games[, cum_pts_before := shift(cumsum(points), fill = 0), by=.(season, team)]
+team_games[, cum_gd_before  := shift(cumsum(gd),     fill = 0), by=.(season, team)]
+
+# forme = moyenne des N derniers points AVANT la date (donc on décale d'1)
+team_games[, form_pts_lastN :=
+             frollmean(shift(points, 1), n = N, align="right", fill=NA),
+           by=.(season, team)]
+
+# On garde seulement les colonnes utiles
+team_state <- team_games[, .(season, Date, team, form_pts_lastN, cum_pts_before, cum_gd_before)]
+```
+
+(v) Rolling join : dernier état connu avant chaque fixture
+
+```{r}
+setDT(future)
+
+# intervalle de recherche pour foverlaps : [-inf, Date]
+future[, start := as.Date("1900-01-01")]
+future[, end   := Date]
+
+team_state[, start := Date]
+team_state[, end   := Date]
+
+setkey(team_state, season, team, start, end)
+
+home_q <- future[, .(fixture_id, season, Date, HomeTeam, AwayTeam, team=HomeTeam, start=as.Date("1900-01-01"), end=Date)]
+away_q <- future[, .(fixture_id, season, Date, HomeTeam, AwayTeam, team=AwayTeam, start=as.Date("1900-01-01"), end=Date)]
+
+setkey(home_q, season, team, start, end)
+setkey(away_q, season, team, start, end)
+
+home_state <- foverlaps(home_q, team_state, type="any", mult="last", nomatch=NA)
+away_state <- foverlaps(away_q, team_state, type="any", mult="last", nomatch=NA)
+
+# Vérif 1 ligne par fixture_id
+stopifnot(home_state[, .N, by=fixture_id][, all(N==1)])
+stopifnot(away_state[, .N, by=fixture_id][, all(N==1)])
+
+```
+
+(vi) Construction table finale des features (future_feat) et différentiels des features
+
+```{r}
+future_feat <- merge(
+  future[, .(fixture_id, season, Date, HomeTeam, AwayTeam)],
+  home_state[, .(fixture_id,
+                 home_form = form_pts_lastN,
+                 home_cum_pts = cum_pts_before,
+                 home_cum_gd  = cum_gd_before)],
+  by="fixture_id", all.x=TRUE
+)
+
+future_feat <- merge(
+  future_feat,
+  away_state[, .(fixture_id,
+                 away_form = form_pts_lastN,
+                 away_cum_pts = cum_pts_before,
+                 away_cum_gd  = cum_gd_before)],
+  by="fixture_id", all.x=TRUE
+)
+
+future_feat[, form_diff_lastN := home_form    - away_form]
+future_feat[, cum_pts_diff    := home_cum_pts - away_cum_pts]
+future_feat[, cum_gd_diff     := home_cum_gd  - away_cum_gd]
+
+# On garde seulement les matchs où les 3 features sont dispo
+to_predict_ok <- future_feat[!is.na(form_diff_lastN) & !is.na(cum_pts_diff) & !is.na(cum_gd_diff)]
+
+cat("Matchs futurs trouvés :", nrow(future_feat), "\n")
+cat("Matchs prédictibles (features OK) :", nrow(to_predict_ok), "\n")
+
+if (nrow(to_predict_ok) == 0) {
+  stop("0 match prédictible : il manque de l'historique pour au moins une équipe (forme/cumul NA).")
+}
+```
+
+(vii) Prédiction (sécurisée H/D/A)
+
+```{r}
+proba_future <- predict(model_multinom, newdata = as.data.frame(to_predict_ok), type = "probs")
+proba_future <- as.matrix(proba_future)
+
+# Si predict renvoie un vecteur (1 seule ligne), on force en matrice 1xK
+if (is.null(dim(proba_future))) {
+  proba_future <- matrix(proba_future, nrow=1, dimnames=list(NULL, names(proba_future)))
+}
+
+# Assurer colonnes H/D/A
+for (lvl in c("H","D","A")) {
+  if (!(lvl %in% colnames(proba_future))) {
+    proba_future <- cbind(proba_future, setNames(rep(0, nrow(proba_future)), lvl))
+  }
+}
+proba_future <- proba_future[, c("H","D","A"), drop=FALSE]
+```
+
+(viii) Table finale des prédictions
+
+```{r}
+fiche_predictions <- as.data.frame(to_predict_ok) %>%
+  mutate(
+    proba_H = proba_future[, "H"],
+    proba_D = proba_future[, "D"],
+    proba_A = proba_future[, "A"],
+    p_max   = pmax(proba_H, proba_D, proba_A),
+    pred_argmax = case_when(
+      proba_H == p_max ~ "H",
+      proba_D == p_max ~ "D",
+      TRUE             ~ "A"
+    ))%>%
+  arrange(Date, HomeTeam, AwayTeam) %>%
+  select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A, p_max)
+
+print(fiche_predictions, n = 50)
+fiche_predictions <- fiche_predictions %>%
+  mutate(
+    pred_class = case_when(
+      p_max == proba_H ~ "H",
+      p_max == proba_D ~ "D",
+      p_max == proba_A ~ "A",
+      TRUE ~ NA_character_  # Sécurité si une valeur est manquante
+      ))
+```
+
+V) L'Interface
+
+```{r}
+ui <- fluidPage(
+  
+  theme = shinytheme("flatly"),
+  
+  titlePanel("⚽ Prédiction des probabilités de match"),
+  
+  sidebarLayout(
+    
+    sidebarPanel(
+      width = 3,
+      
+      h4("Sélection du match"),
+      
+      selectInput(
+        inputId = "match",
+        label = "Match",
+        choices = NULL,
+        selectize = TRUE
+      ),
+      
+      hr(),
+      
+      helpText(
+        "Tape le nom d’une équipe, une date ou fais défiler la liste."
+      )
+    ),
+    
+    mainPanel(
+      
+      fluidRow(
+        
+        column(
+          6,
+          h3(textOutput("match_title")),
+          h5(textOutput("match_date"))
+        ),
+        
+        column(
+          6,
+          h3("Issue la plus probable"),
+          h4(
+            textOutput("predicted_outcome"),
+            style = "color:#2C3E50; font-weight:bold;"
+          )
+        )
+      ),
+      
+      hr(),
+      
+      plotOutput("proba_plot", height = "350px")
+    )
+  )
+)
+```
+
+```{r}
+server <- function(input, output, session) {
+  
+  # Création d'un label lisible pour l'utilisateur
+  matches_ui <- fiche_predictions %>%
+    mutate(
+      match_label = paste0(
+        format(Date, "%d/%m/%Y"),
+        " – ",
+        HomeTeam, " vs ", AwayTeam
+      )
+    )
+  
+  # Initialisation du selectInput avec options premium
+ updateSelectizeInput(
+  session,
+  "match",
+  choices = matches_ui$match_label,
+  selected = matches_ui$match_label[1],
+  options = list(
+    placeholder = "Ex: Paris, Marseille, 17/08...",
+    allowClear = TRUE,
+    maxOptions = 5000
+  )
+)
+
+  
+  # Match sélectionné
+  selected_match <- reactive({
+    matches_ui %>%
+      filter(match_label == input$match)
+  })
+  
+  # Titre du match
+  output$match_title <- renderText({
+    paste(
+      selected_match()$HomeTeam,
+      "vs",
+      selected_match()$AwayTeam
+    )
+  })
+  
+  # Date du match
+  output$match_date <- renderText({
+    paste(
+      "Date :",
+      format(selected_match()$Date, "%d %B %Y")
+    )
+  })
+  
+  # Issue la plus probable 
+  output$predicted_outcome <- renderText({
+    dplyr::recode(
+      selected_match()$pred_class,
+      "H" = "Victoire domicile",
+      "D" = "Match nul",
+      "A" = "Victoire extérieur"
+    )
+  })
+  
+  # Graphique des probabilités
+  output$proba_plot <- renderPlot({
+    
+    df_plot <- tibble(
+      Issue = c("Victoire domicile", "Match nul", "Victoire extérieur"),
+      Probabilité = c(
+        selected_match()$proba_H,
+        selected_match()$proba_D,
+        selected_match()$proba_A
+      )
+    )
+    
+    ggplot(df_plot, aes(x = Issue, y = Probabilité, fill = Issue)) +
+      geom_col(width = 0.6, show.legend = FALSE) +
+      geom_text(
+        aes(label = scales::percent(Probabilité, accuracy = 0.1)),
+        vjust = -0.5,
+        size = 5
+      ) +
+      scale_y_continuous(
+        labels = scales::percent,
+        limits = c(0, 1)
+      ) +
+      scale_fill_manual(
+        values = c("#2ECC71", "#F1C40F", "#E74C3C")
+      ) +
+      labs(
+        y = "Probabilité",
+        x = NULL
+      ) +
+      theme_minimal(base_size = 14)
+  })
+}
+```
+
+```{r}
+shinyApp(ui, server)
+```
