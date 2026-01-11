@@ -524,7 +524,7 @@ Ici, on a les matchs les plus déséquilibrés :
 top10_pred_des <- pred_2526_out %>%
   arrange(desc(p_max)) %>%
   select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A, p_max) %>%
-  head(10)
+  head(5)
 saveRDS(top10_pred_des, "top10_pred_des.rds")
 knitr::kable(top10_pred_des)
 ```
@@ -536,7 +536,7 @@ Ici, on a les matchs les plus incertains :
 top10_pred_inc <- pred_2526_out %>%
 arrange(p_max) %>%
 select(Date, HomeTeam, AwayTeam, proba_H, proba_D, proba_A, p_max) %>%
-head(10)
+head(5)
 saveRDS(top10_pred_inc, "top10_pred_inc.rds")
 knitr::kable(top10_pred_inc)
 ```
