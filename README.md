@@ -13,7 +13,7 @@ library(shiny)
 library(shinythemes)
 library(data.table)
 ```
-# I) Introduction
+# Introduction
 
 ## 1) Nettoyage des données
 ### (i) Importation des jeux de données de toutes les saisons.
@@ -78,11 +78,12 @@ Afin d'entraîner notre modèle statistique d'apprentissage, il est nécessaire 
 - Celui de la forme récente entre les deux équipes qui s'affrontent lors d'un match
 - Celui des points cumulés entre les deux équipes qui s'affrontent lors d'un match
 - Celui des buts cumulés (différence entre les buts marqués et encaissés) de l'équipe domicile et extérieur avant le match.
+
 Après cela, nous nous attarderons sur la performance d'une modélisation par apprentissage statistique, grâce à l'entraînement de nos features sur les trois saisons précédentes, en l'évaluant sur la saison 2024-2025. A l'aide d'un modèle multinomial on va déterminer la précision de ce dernier à prédire les probabilités d'issues d'un match de football. 
 Enfin, on va essayé de prédire les résultats de match, du moins leurs probabilités, pour les matchs à venir sur la saison actuelle 2025-2026 (matchs d'après trêve).
 On concluera ensuite quant aux résultats de notre modèle tout en énoncant ses différentes limites.
 
-# II) Phase 1 : Entraînement (apprentissage) sur les données des saisons 2021-2022, 2022-2023 et 2023-2024 réalisé notamment grâce à la création de features 
+# I) Phase 1 : Entraînement (apprentissage) sur les données des saisons 2021-2022, 2022-2023 et 2023-2024 réalisé notamment grâce à la création de features 
 
 ## 1) Création des nouvelles variables 
 On code les features principales :
@@ -100,12 +101,12 @@ matches <- matches %>%
   arrange(Date) %>%
   mutate(
     home_points = case_when(                                                    #Attribution des points pour l'équipe à domicile.
-      FTR == "H" ~ 3,                                                           #Victoire pour l'équipe à domicile et donc rajout de 3 points pour leur classement.
+      FTR == "H" ~ 3,                                                           #Victoire pour l'équipe à domicile et donc rajout de 3 points à cette équipe dans le classement.
       FTR == "D" ~ 1,                                                           #Match nul donc gain d'un point.
       TRUE ~ 0                                                                  #Dans le dernier cas (défaite), aucun gain.
     ),
     away_points = case_when(                                                    #Attribution des points pour l'équipe à l'extérieur.
-      FTR == "A" ~ 3,                                                           #Victoire pour l'équipe à l'extérieur et donc rajoute de 3 pour leur classement.
+      FTR == "A" ~ 3,                                                           #Victoire pour l'équipe à l'extérieur et donc rajout de 3 points à cette équipe dans le classement.
       FTR == "D" ~ 1,                                                           #Match nul donc gain d'un point.
       TRUE ~ 0                                                                  #Dans le dernier cas (défaite), aucun gain.
     ),
@@ -150,7 +151,7 @@ team_matches <- matches %>%
 team_form <- team_matches %>%
   group_by(team) %>%
   mutate(
-    form_pts_lastN = slide_dbl(                                                 #Calcule une statistique sur une fenêtre glissante (rolling window) et renvoie un vecteur numérique (dbl).
+    form_pts_lastN = slide_dbl(                                                 #Calcule une statistique sur une fenêtre glissante (rolling window) et renvoie un vecteur numérique.(dbl).
       
       .x = lag(points),                                                         #.x est la série sur laquelle on calcule le rolling.
                                                                                 #lag(points) veut dire qu'on décale d'une ligne vers le bas (on exclut le match actuel).
@@ -171,24 +172,24 @@ team_form <- team_matches %>%
   ) %>%
   
   ungroup() %>%                                                                 #ungroup() permet de retirer le group_by (bonne pratique pour éviter des effets de bord) 
-                                                                                #Regarder ce qu'est un effet de bord si incompris.
+                                                                                #Un effet de bord c'est lorsqu'on a fait un regroupement sur une ou des colonne(s) et qu'après                                                                                        #avoir fait ce qu'on avait à faire pour cette colonne, les fonctions d'après sont toujours appliquées                                                                                 #à cette colonne alors que ce n'est pas le but.
   select(match_id, team, form_pts_lastN)                                        #On garde seulement les colonnes nécessaires au join final
                                                                                 
 #Troisième Étape : 
 
-matches <- matches %>%                                                          #Join forme pour l'équipe à domicile
+matches <- matches %>%                                                          #Join pour l'équipe à domicile.
   left_join(
     team_form %>% rename(home_form_pts_lastN = form_pts_lastN),
     by = c("match_id", "HomeTeam" = "team")
   )
 
-matches <- matches %>%                                                          #Join forme pour l'équipe à l'extérieur
+matches <- matches %>%                                                          #Join pour l'équipe à l'extérieur.
   left_join(
     team_form %>% rename(away_form_pts_lastN = form_pts_lastN),
     by = c("match_id", "AwayTeam" = "team")
   )
 
-matches <- matches %>%                                                          #Différence de forme (domicile - extérieur)
+matches <- matches %>%                                                          #Différence de forme (domicile - extérieur).
   mutate(form_diff_lastN = home_form_pts_lastN - away_form_pts_lastN)
 ```
 
@@ -219,7 +220,7 @@ team_points <- matches %>%
     values_to = "team"                                                          #Nom de l'équipe.
   ) %>%
   mutate(
-    points = if_else(side == "HomeTeam", home_points, away_points)              #Création d'une variable unique "points", elle prend la valeur home_points ou away_points selon le rôle de l'équipe.
+    points = if_else(side == "HomeTeam", home_points, away_points)              #Création d'une variable unique "points", elle prend la valeur home_points ou away_points selon le                                                                                    #rôle de l'équipe.
   ) %>%
   select(match_id, Date, season, team, points)                                  #On conserve uniquement les colonnes utiles pour le calcul des cumuls.
 
@@ -229,7 +230,7 @@ team_cum_pts <- team_points %>%
   group_by(team, season) %>%                                                    #Regroupement par équipe et par saison, le cumul repart donc à zéro au début de chaque saison.
   mutate(
     cum_pts_before = lag(cumsum(points), default = 0)                           #cumsum(points) calcule la somme cumulée incluant le match courant
-                                                                                #lag(...) décale cette somme d'un match, on obtient ainsi le nombre de points cumulés avant le match courant
+                                                                                #lag(...) décale cette somme d'un match, on obtient ainsi le nombre de points cumulés avant le match                                                                                  #courant.
    ) %>%
   ungroup() %>%
   select(match_id, team, season, cum_pts_before)
@@ -254,7 +255,8 @@ matches <- matches %>%
   )
 ```
 
-On a donc créée trois nouvelles variables
+On a donc créée trois nouvelles variables :
+
 - Les points cumulés de l'équipe à domicile avant le match (home_cum_points).
 - Les points cumulés de l'équipe à l'extérieur avant le match (away_cum_pts).
 - L'avantage en points cumulés (cum_pts_diff), qui est la différence entre les points cumulés de l'équipe à domicile (home_cum_pts) et extérieur (away_cum_pts) avant le match.
@@ -285,11 +287,9 @@ team_goals <- matches %>%
   ) %>%
   
   mutate(
-    # buts marqués (goals_for) et buts encaissés (goals_against)
-    # dépendent du fait d'être à domicile ou à l'extérieur
     goals_for = if_else(side == "HomeTeam", FTHG, FTAG),                        #Buts marqués (goals_for)
     goals_against = if_else(side == "HomeTeam", FTAG, FTHG),                    #Buts encaissés (goals_against), les deux dépendent du fait d'être à domicile ou à l'extérieur.
-    across(c(goals_for, goals_against), ~ replace_na(.x, 0))                    #On remplace les deux seuls NA dans team_goals car sinon les NA se propagent ensuite dans tous les cumuls de matches.
+    across(c(goals_for, goals_against), ~ replace_na(.x, 0))                    #On remplace les deux seuls NA dans team_goals car sinon les NA se propagent ensuite dans tous les                                                                                    #cumuls de matches.
     ) %>%                                                                       
   
   select(match_id, Date, season, team, goals_for, goals_against)
@@ -299,10 +299,10 @@ team_goals <- matches %>%
 team_cum_goals <- team_goals %>%
   group_by(team, season) %>%                                                    #Reset au début de chaque saison
   mutate(
-    cum_gf_including = cumsum(goals_for),                                       #Addition des buts marqués match après match en incluant le match courant. On ne peut pas utiliser tel quel.
-    cum_ga_including = cumsum(goals_against),                                   #Addition des buts encaissés match après match en incluant le match courant. On ne peut pas utiliser tel quel.
+    cum_gf_including = cumsum(goals_for),                                       #Addition des buts marqués match après match en incluant le match courant. On ne peut pas utiliser                                                                                    #tel quel.
+    cum_ga_including = cumsum(goals_against),                                   #Addition des buts encaissés match après match en incluant le match courant. On ne peut pas utiliser                                                                                  #tel quel.
     cum_gf_before = lag(cum_gf_including, default = 0),                         #On décale d'un match pour obtenir le cumul avant le match courant
-    cum_ga_before = lag(cum_ga_including, default = 0),                         #default = 0 : pour le premier match de la saison on considère que l'équipe a 0 but cumulé avant de jouer.
+    cum_ga_before = lag(cum_ga_including, default = 0),                         #default = 0 : pour le premier match de la saison on considère que l'équipe a 0 but cumulé avant de                                                                                   #jouer.
     cum_gd_before = cum_gf_before - cum_ga_before                               #Différence de buts cumulée avant le match = buts marqués - buts encaissés
   ) %>%                                                                         #Différence positive veut dire que l'équipe est perfomante
                                                                                 #Différence négative veut dire que l'équipe est en difficulté
@@ -337,13 +337,13 @@ matches <- matches %>%
 
 matches <- matches %>%
   mutate(
-    cum_gf_diff = home_cum_gf - away_cum_gf,                                    #Différence entre les buts marqués cumulés par l'équipe à domicile et l'équipe extérieur, cela mesure la puissance offensive                                                                                 #relative des deux équipes qui s'affrontent au match courant. 
-                                                                                #Si cum_gf_diff > 0, l'équipe à domicile a marqué plus de buts que celle extérieur depuis le début de la saison. 
-                                                                                #Si cum_gf_diff < 0, l'équipe extérieur a marqué plus de buts que celle à domicile depuis le début de la saison.
+    cum_gf_diff = home_cum_gf - away_cum_gf,                                    #Différence entre les buts marqués cumulés par l'équipe à domicile et l'équipe extérieur, cela mesure                                                                                 #la puissance offensive relative des deux équipes qui s'affrontent au match courant. 
+                                                                                #Si cum_gf_diff > 0, l'équipe à domicile a marqué plus de buts que celle extérieur depuis le début de                                                                                 #la saison. 
+                                                                                #Si cum_gf_diff < 0, l'équipe extérieur a marqué plus de buts que celle à domicile depuis le début de                                                                                 #la saison.
     
-    cum_ga_diff = home_cum_ga - away_cum_ga,                                    #Différence entre les buts encaissés cumulés par l'équipe à docimile et l'équipe extérieure, moins on encaisse mieux c'est                                                                                    donc le signe est contre-intuitif.
-                                                                                #Si cum_ga_diff > 0, l'équipe domicile a un désavantage défensif. Elle a encaissé plus de but que l'équipe extérieur.
-                                                                                #Si cum_ga_diff < 0, l'équipe domicile a un avantage défensif. Elle a encaissé moins de but que l'équipe extérieur
+    cum_ga_diff = home_cum_ga - away_cum_ga,                                    #Différence entre les buts encaissés cumulés par l'équipe à docimile et l'équipe extérieure, moins on                                                                                 #encaisse mieux c'est donc le signe est contre-intuitif.                                                     
+                                                                                #Si cum_ga_diff > 0, l'équipe domicile a un désavantage défensif. Elle a encaissé plus de but que                                                                                     #l'équipe extérieur.
+                                                                                #Si cum_ga_diff < 0, l'équipe domicile a un avantage défensif. Elle a encaissé moins de but que                                                                                       #l'équipe extérieur.
     cum_gd_diff = home_cum_gd - away_cum_gd                                     #La différence entre les buts cumulés de l'équipe domicile et extérieur.
   )                                                                             #cum_gd_diff > 0, l'équipe domicile est globalement supérieur à l'équipe extérieur (avantage net).
                                                                                 #cum_gd_diff < 0, l'équipe domicile est globalement inférieur à l'équilibre extérieur (avantage net).
@@ -440,7 +440,7 @@ test_data <- test_data %>%
     pred_class = colnames(proba_test)[apply(proba_test, 1, which.max)])
 ```
 
-### (ii) Matrice de confusion et accruacy globale du modèle
+### (ii) Matrice de confusion et accuracy globale du modèle
 
 ```{r}
 confusion_matrix <- table(
@@ -457,9 +457,10 @@ accuracy
 Le modèle atteint une accuracy d’environ 54 % sur la saison 2024–2025, ce qui est significativement supérieur à une prédiction aléatoire (33 %).
 Ce résultat met en évidence la capacité du modèle à capter une partie des dynamiques de performance des équipes, tout en soulignant le caractère aléatoire du football.
 
-# IV) Phase 3 : Prédiction des probabilités sur la saison 2025–2026 
+# III) Phase 3 : Prédiction des probabilités sur la saison 2025–2026 
 
-## 1) Génération des probabilités de victoire pour les matchs déjà joués de la saison 25/26 L’objectif de cette phase est d’utiliser le modèle multinomial entraîné sur les saisons 2021–2022 à 2023–2024 et évalué sur la saison 2024–2025, afin de prédire les probabilités de victoire à domicile (H), de match nul (D) et de victoire à l’extérieur (A) pour tous les matches de la saison 2025–2026. 
+## 1) Génération des probabilités de victoire pour les matchs déjà joués de la saison 25/26
+L’objectif de cette phase est d’utiliser le modèle multinomial entraîné sur les saisons 2021–2022 à 2023–2024 et évalué sur la saison 2024–2025, afin de prédire les probabilités de victoire à domicile (H), de match nul (D) et de victoire à l’extérieur (A) pour tous les matches de la saison 2025–2026. 
 
 Il s’agit de probabilités ex ante, fondées uniquement sur les informations disponibles avant chaque match : Forme récente, points cumulés, différentiel de buts cumulés. 
 Nous faisons bien attention qu'aucune information issue des résultats de la saison 2025–2026 n’est utilisée dans l’apprentissage du modèle, garantissant l’absence totale de fuite temporelle ou de bias. 
@@ -515,9 +516,9 @@ pred_2526_out <- pred_2526 %>%
   arrange(Date)
 ```
 
-### (iv) Illustration : matches très déséquilibrés vs matches très incertains 
+### (iv) Illustration : matchs très déséquilibrés vs matchs très incertains 
 
-Ici Matches les plus déséquilibrés :
+Ici, on a les matchs les plus déséquilibrés :
 
 ```{r}
 top10_pred_des <- pred_2526_out %>%
@@ -527,9 +528,9 @@ top10_pred_des <- pred_2526_out %>%
 saveRDS(top10_pred_des, "top10_pred_des.rds")
 knitr::kable(top10_pred_des)
 ```
-Ces matches oppposent généralement une équipe en forte dynamique à une équipe en difficulté.
+Ces matchs oppposent généralement une équipe en forte dynamique à une équipe en difficulté.
 
-Ici Matches les plus incertains :
+Ici, on a les matchs les plus incertains :
 
 ```{r}
 top10_pred_inc <- pred_2526_out %>%
@@ -539,11 +540,11 @@ head(10)
 saveRDS(top10_pred_inc, "top10_pred_inc.rds")
 knitr::kable(top10_pred_inc)
 ```
-Ces matches correspondent souvent à des équipes proches en termes de performance, des débuts de saison ou des confrontations historiquement équilibrées. 
+Ces matchs correspondent souvent à des équipes proches en termes de performance, des débuts de saison ou des confrontations historiquement équilibrées. 
 
 ## 2) Génération des probabilités de victoire pour les matchs futurs de la saison 25/26 
 
-### (i)Ajout des rencontres non disponible dans la base de donnée 25/26 
+### (i) Ajout des rencontres non disponible dans la base de donnée 25/26 
 Comme la base de donnée de la saison 25/26 contient que les matchs qui ont été déjà joué, il faut ajouter les matches restants de la saison 25/26. On peut maintenant avoir également une prédiction sur les matchs futurs.
 
 ```{r}
@@ -903,7 +904,7 @@ Matchs futurs trouvés : 153 la date post-trêve et la présence de fixtures uni
 
 Matchs prédictibles (features OK) : 153 veut dire que pour tous ces 153 matchs, nous avons bien les trois features (form_diff_lastN, cum_pts_diff, cum_gd_diff) calculées, donc il n’y a pas de données manquantes empêchant la prédiction.
 
-### (vii) Prédiction (sécurisée H/D/A)
+### (vii) Prédiction (sécuriser H/D/A)
 Ici on applique le modèle multinomial entraîné pour prédire les résultats H/D/A des matchs futurs pour lesquels les features sont disponibles. On sécurise le résultat pour gérer les cas particuliers :
 - si un seul match, on force la sortie en matrice 1x3
 - si certaines colonnes H/D/A sont manquantes, on les crée avec des 0
@@ -966,14 +967,14 @@ fiche_predictions <- fiche_predictions %>%
       ))
 ```
 
-# V) L'Interface
+# IV) Phase 4 : Construction de l'interface
 
 ```{r}
 ui <- fluidPage(
   
   theme = shinytheme("flatly"),
   
-  titlePanel("⚽ Prédiction des probabilités de match"),
+  titlePanel("Prédiction des probabilités de match"),
   
   sidebarLayout(
     
